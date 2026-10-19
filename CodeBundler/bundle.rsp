@@ -1,0 +1,14 @@
+exec
+--depsfile
+"D:\Users\User\Documents\CodeBundler\CodeBundler\bin\Debug\net6.0\CodeBundler.deps.json"
+--runtimeconfig
+"D:\Users\User\Documents\CodeBundler\CodeBundler\bin\Debug\net6.0\CodeBundler.runtimeconfig.json"
+"D:\Users\User\Documents\CodeBundler\CodeBundler\bin\Debug\net6.0\CodeBundler.dll"
+bundle
+--language
+"all"
+--sort
+"name"
+--note
+--author
+"sheviiiiiiiiiiiiiiii"

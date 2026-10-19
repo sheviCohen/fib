@@ -1,0 +1,213 @@
+using System.CommandLine;
+using System.IO;
+
+Option<string> languageOption = new("--language", "-l")
+{
+    Description = "The programming language(s) to include.",
+    Required = true
+};
+Option<string> outputOption = new("--output", "-o")
+{
+    Description = "The path of the output file."
+};
+Option<bool> noteOption = new("--note", "-n")
+{
+    Description = "Include each source file's name and relative path as a comment."
+};
+
+RootCommand rootCommand = new("CodeBundler - combines source files into one file.");
+
+Command bundleCommand = new("bundle", "Bundles source files from the current directory.");
+
+bundleCommand.Options.Add(languageOption);
+bundleCommand.Options.Add(outputOption);
+bundleCommand.Options.Add(noteOption);
+
+rootCommand.Subcommands.Add(bundleCommand);
+
+bundleCommand.SetAction(parseResult =>
+{
+    string? language = parseResult.GetValue(languageOption);
+    string? output = parseResult.GetValue(outputOption);
+    bool includeNotes = parseResult.GetValue(noteOption);
+
+    try
+    {
+        string currentDirectory = Directory.GetCurrentDirectory();
+
+        string outputPath = output is null
+            ? Path.Combine(currentDirectory, "bundle.txt")
+            : Path.GetFullPath(output);
+
+        var supportedLanguages =
+            new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["cs"] = new[] { ".cs" },
+                ["c"] = new[] { ".c", ".h" },
+                ["cpp"] = new[] { ".cpp", ".cc", ".cxx", ".h", ".hpp", ".hh", ".hxx" },
+                ["java"] = new[] { ".java" },
+                ["py"] = new[] { ".py" },
+                ["js"] = new[] { ".js", ".jsx" },
+                ["ts"] = new[] { ".ts", ".tsx" },
+                ["go"] = new[] { ".go" },
+                ["rs"] = new[] { ".rs" },
+                ["php"] = new[] { ".php" },
+                ["rb"] = new[] { ".rb" }
+            };
+
+        string[] requestedLanguages = (language ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries |
+                        StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (requestedLanguages.Length == 0)
+        {
+            Console.Error.WriteLine("ERROR: Please specify a language.");
+            return;
+        }
+
+        bool includeAll = requestedLanguages.Contains(
+            "all", StringComparer.OrdinalIgnoreCase);
+
+        string[] unknownLanguages = requestedLanguages
+            .Where(name =>
+                !string.Equals(name, "all", StringComparison.OrdinalIgnoreCase) &&
+                !supportedLanguages.ContainsKey(name))
+            .ToArray();
+
+        if (unknownLanguages.Length > 0)
+        {
+            Console.Error.WriteLine(
+                $"ERROR: Unsupported language(s): {string.Join(", ", unknownLanguages)}");
+
+            Console.Error.WriteLine(
+                $"Supported languages: {string.Join(", ", supportedLanguages.Keys.OrderBy(name => name))}, all");
+
+            return;
+        }
+
+        HashSet<string> extensions = includeAll
+            ? supportedLanguages.Values
+                .SelectMany(ext => ext)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : requestedLanguages
+                .SelectMany(name => supportedLanguages[name])
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var excludedDirectories = new HashSet<string>(
+            new[] { "bin", "obj", "Debug", "Release" },
+            StringComparer.OrdinalIgnoreCase);
+
+        IEnumerable<string> EnumerateSourceFiles(string directory)
+        {
+            foreach (string file in Directory.EnumerateFiles(directory))
+            {
+                yield return file;
+            }
+
+            foreach (string subdirectory in Directory.EnumerateDirectories(directory))
+            {
+                if (excludedDirectories.Contains(Path.GetFileName(subdirectory)))
+                {
+                    continue;
+                }
+
+                foreach (string file in EnumerateSourceFiles(subdirectory))
+                {
+                    yield return file;
+                }
+            }
+        }
+
+        HashSet<string> allSupportedExtensions = supportedLanguages.Values
+            .SelectMany(ext => ext)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        if (File.Exists(outputPath) &&
+            allSupportedExtensions.Contains(Path.GetExtension(outputPath)))
+        {
+            Console.Error.WriteLine(
+                "ERROR: The output path points to an existing source-code file. Choose a different output path.");
+
+            return;
+        }
+
+        string[] sourceFiles = EnumerateSourceFiles(currentDirectory)
+            .Where(file =>
+                !string.Equals(
+                    Path.GetFullPath(file),
+                    outputPath,
+                    StringComparison.OrdinalIgnoreCase))
+            .Where(file => extensions.Contains(Path.GetExtension(file)))
+            .OrderBy(file => Path.GetFileName(file), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(file => Path.GetRelativePath(currentDirectory, file),
+                    StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        using (StreamWriter writer = new(outputPath, false))
+        {
+            for (int i = 0; i < sourceFiles.Length; i++)
+            {
+                string fileContent = File.ReadAllText(sourceFiles[i]);
+
+                if (includeNotes)
+                {
+                    string relativePath = Path.GetRelativePath(
+                        currentDirectory, sourceFiles[i]);
+
+                    string fileName = Path.GetFileName(sourceFiles[i]);
+                    string extension = Path.GetExtension(sourceFiles[i]);
+
+                    string commentPrefix =
+                        extension.Equals(".py", StringComparison.OrdinalIgnoreCase) ||
+                        extension.Equals(".rb", StringComparison.OrdinalIgnoreCase)
+                            ? "#"
+                            : "//";
+
+                    writer.WriteLine(
+                        $"{commentPrefix} Source file: {fileName} | Relative path: {relativePath}");
+                }
+                writer.Write(fileContent);
+
+                if (!fileContent.EndsWith('\n') &&
+                    !fileContent.EndsWith('\r'))
+                {
+                    writer.WriteLine();
+                }
+
+                if (i < sourceFiles.Length - 1)
+                {
+                    writer.WriteLine();
+                }
+            }
+        }
+
+        Console.WriteLine(
+            $"Selected language(s): {string.Join(", ", requestedLanguages)}");
+
+        Console.WriteLine($"Files found: {sourceFiles.Length}");
+
+        foreach (string file in sourceFiles)
+        {
+            Console.WriteLine(
+                $" - {Path.GetRelativePath(currentDirectory, file)}");
+        }
+
+        Console.WriteLine($"Output file created successfully: {outputPath}");
+    }
+    catch (Exception ex) when (
+        ex is IOException ||
+        ex is UnauthorizedAccessException ||
+        ex is ArgumentException ||
+        ex is NotSupportedException ||
+        ex is System.Security.SecurityException)
+    {
+        Console.Error.WriteLine(
+            $"ERROR: Could not process files: {ex.Message}");
+    }
+});
+
+
+
+rootCommand.Parse(args).Invoke();
